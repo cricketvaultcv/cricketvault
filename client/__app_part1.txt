@@ -1,0 +1,705 @@
+﻿import express, {
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import { z } from "zod";
+import multer from "multer";
+import mongoose from "mongoose";
+import {
+  User,
+  Player,
+  Coach,
+  Plan,
+  Subscription,
+  CoachRequest,
+  Payment,
+  Video,
+  Review,
+  ActionPlan,
+  Notification,
+  Audit,
+} from "./models.js";
+import {
+  createRazorpayOrder,
+  processRazorpayWebhook,
+  reconcilePayment,
+  reconcileRazorpayStatus,
+} from "./payments.js";
+import { createStorageAdapter } from "./storage.js";
+import {
+  canAccessVideo,
+  canRequestCoach,
+  hasBlockingSubscription,
+  isSubscriptionActive,
+  type ResourceRole,
+} from "./policies.js";
+import {
+  releaseExpiredCoachRequests,
+  releaseExpiredSubscriptions,
+  reserveCoachCapacity,
+} from "./capacity.js";
+const secret = () => {
+  if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is required");
+  return process.env.JWT_SECRET;
+};
+const app = express();
+const storage = createStorageAdapter();
+app.use(helmet());
+app.use(cors({ origin: process.env.CLIENT_URL || "http://localhost:5173" }));
+app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60e3, max: 100 }));
+type Authed = Request & { user?: { id: string; role: ResourceRole } };
+const asyncRoute =
+  (f: (req: Request, res: Response, next: NextFunction) => unknown) =>
+  (req: Request, res: Response, next: NextFunction) =>
+    Promise.resolve(f(req, res, next)).catch(next);
+app.post(
+  "/api/v1/payments/webhook",
+  express.raw({ type: "application/json", limit: "1mb" }),
+  asyncRoute(async (req, res) => {
+    if (!Buffer.isBuffer(req.body))
+      throw Object.assign(new Error("Webhook requires a raw JSON body"), {
+        status: 400,
+      });
+    const result = await processRazorpayWebhook(
+      req.body,
+      String(req.headers["x-razorpay-signature"] || ""),
+      req.headers["x-razorpay-event-id"]?.toString(),
+    );
+    res.json(result);
+  }),
+);
+app.use(express.json({ limit: "1mb" }));
+const auth = asyncRoute(
+  async (req: Authed, res: Response, next: NextFunction) => {
+    const token = req.headers.authorization?.replace(/^Bearer\s+/, "");
+    if (!token)
+      throw Object.assign(new Error("Authentication required"), {
+        status: 401,
+      });
+    let claims: any;
+    try {
+      claims = jwt.verify(token, secret());
+    } catch {
+      throw Object.assign(
+        new Error("Invalid or expired authentication token"),
+        { status: 401 },
+      );
+    }
+    const user = await User.findById(claims.id);
+    if (!user || user.status === "DISABLED")
+      throw Object.assign(new Error("Account unavailable"), { status: 401 });
+    req.user = { id: user.id, role: user.role as ResourceRole };
+    next();
+  },
+);
+const roles = (...allowed: string[]) => [
+  auth as any,
+  (req: Authed, res: Response, next: NextFunction) =>
+    allowed.includes(req.user!.role)
+      ? next()
+      : next(Object.assign(new Error("Forbidden"), { status: 403 })),
+];
+const notice = async (user: any, title: string, body: string, type = "INFO") =>
+  Notification.create({ user, title, body, type });
+const active = (s: any) => isSubscriptionActive(s.status, s.expiresAt);
+app.get("/api/v1/health", (_q, res) =>
+  res.json({ ok: true, mode: process.env.NODE_ENV || "development" }),
+);
+app.post(
+  "/api/v1/auth/register",
+  asyncRoute(async (req, res) => {
+    const input = z
+      .object({
+        name: z.string().min(2),
+        email: z
+          .string()
+          .email()
+          .transform((v) => v.toLowerCase()),
+        password: z.string().min(8),
+        role: z.enum(["PLAYER", "COACH"]).default("PLAYER"),
+      })
+      .parse(req.body);
+    if (await User.exists({ email: input.email }))
+      throw Object.assign(new Error("Email already registered"), {
+        status: 409,
+      });
+    const user = await User.create({
+      ...input,
+      passwordHash: await bcrypt.hash(input.password, 12),
+      status: input.role === "COACH" ? "PENDING" : "ACTIVE",
+    });
+    if (input.role === "PLAYER") await Player.create({ user: user._id });
+    else await Coach.create({ user: user._id, approved: false });
+    const token = jwt.sign({ id: user.id, role: user.role }, secret(), {
+      expiresIn: "7d",
+    });
+    res
+      .status(201)
+      .json({
+        token,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+  }),
+);
+app.post(
+  "/api/v1/auth/login",
+  asyncRoute(async (req, res) => {
+    const input = z
+      .object({
+        email: z
+          .string()
+          .email()
+          .transform((v) => v.toLowerCase()),
+        password: z.string(),
+      })
+      .parse(req.body);
+    const user = await User.findOne({ email: input.email }).select(
+      "+passwordHash",
+    );
+    if (!user || !(await bcrypt.compare(input.password, user.passwordHash)))
+      throw Object.assign(new Error("Invalid email or password"), {
+        status: 401,
+      });
+    if (user.status === "DISABLED")
+      throw Object.assign(new Error("Account disabled"), { status: 403 });
+    const token = jwt.sign({ id: user.id, role: user.role }, secret(), {
+      expiresIn: "7d",
+    });
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  }),
+);
+app.get(
+  "/api/v1/auth/me",
+  auth,
+  asyncRoute(async (req: Authed, res) => {
+    const user = await User.findById(req.user!.id);
+    res.json({ user });
+  }),
+);
+app.get(
+  "/api/v1/players/me",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) =>
+    res.json({
+      profile: await Player.findOne({ user: req.user!.id }).populate(
+        "user",
+        "name email",
+      ),
+    }),
+  ),
+);
+app.put(
+  "/api/v1/players/me",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const data = z
+      .object({
+        ageGroup: z.string().optional(),
+        location: z.string().optional(),
+        playingRole: z.string().optional(),
+        battingStyle: z.string().optional(),
+        bowlingStyle: z.string().optional(),
+        skillLevel: z.string().optional(),
+        formats: z.array(z.string()).optional(),
+        goals: z.array(z.string()).optional(),
+        improvements: z.array(z.string()).optional(),
+      })
+      .parse(req.body);
+    const profile = await Player.findOneAndUpdate(
+      { user: req.user!.id },
+      data,
+      { new: true, upsert: true },
+    );
+    res.json({ profile });
+  }),
+);
+app.get(
+  "/api/v1/coaches",
+  auth,
+  asyncRoute(async (req, res) => {
+    await releaseExpiredSubscriptions();
+    await releaseExpiredCoachRequests();
+    const filter: any = {
+      approved: true,
+      available: true,
+      $expr: {
+        $lt: [{ $add: ["$activeCount", "$reservedCount"] }, "$capacity"],
+      },
+    };
+    const coaches = await Coach.find(filter)
+      .populate("user", "name email")
+      .sort({ experience: -1 });
+    res.json({ coaches });
+  }),
+);
+app.get(
+  "/api/v1/coaches/me",
+  ...roles("COACH"),
+  asyncRoute(async (req: Authed, res) =>
+    res.json({ profile: await Coach.findOne({ user: req.user!.id }) }),
+  ),
+);
+app.put(
+  "/api/v1/coaches/me",
+  ...roles("COACH"),
+  asyncRoute(async (req: Authed, res) => {
+    const body = z
+      .object({
+        bio: z.string().max(1000).optional(),
+        experience: z.number().min(0).optional(),
+        specialties: z.array(z.string()).optional(),
+        levels: z.array(z.string()).optional(),
+        formats: z.array(z.string()).optional(),
+        available: z.boolean().optional(),
+      })
+      .parse(req.body);
+    res.json({
+      profile: await Coach.findOneAndUpdate({ user: req.user!.id }, body, {
+        new: true,
+      }),
+    });
+  }),
+);
+app.get(
+  "/api/v1/plans",
+  asyncRoute(async (_q, res) =>
+    res.json({
+      plans: await Plan.find({ published: true }).sort({ pricePaise: 1 }),
+    }),
+  ),
+);
+app.post(
+  "/api/v1/admin/plans",
+  ...roles("ADMIN"),
+  asyncRoute(async (req, res) => {
+    const plan = await Plan.create(
+      z
+        .object({
+          name: z.string().min(2),
+          description: z.string(),
+          pricePaise: z.number().int().positive(),
+          durationDays: z.number().int().positive(),
+          maxVideos: z.number().int().positive(),
+          includedReviews: z.number().int().positive(),
+          feedbackFrequency: z.string(),
+          features: z.array(z.string()),
+          published: z.boolean(),
+        })
+        .parse(req.body),
+    );
+    await Audit.create({
+      actor: (req as Authed).user!.id,
+      action: "PLAN_CREATED",
+      target: plan.id,
+      meta: { name: plan.name, published: plan.published },
+    });
+    res.status(201).json({ plan });
+  }),
+);
+app.get(
+  "/api/v1/admin/plans",
+  ...roles("ADMIN"),
+  asyncRoute(async (_req, res) =>
+    res.json({ plans: await Plan.find().sort({ createdAt: -1 }) }),
+  ),
+);
+app.patch(
+  "/api/v1/admin/plans/:id",
+  ...roles("ADMIN"),
+  asyncRoute(async (req, res) => {
+    const data = z
+      .object({
+        name: z.string().min(2).optional(),
+        description: z.string().optional(),
+        pricePaise: z.number().int().positive().optional(),
+        durationDays: z.number().int().positive().optional(),
+        maxVideos: z.number().int().positive().optional(),
+        includedReviews: z.number().int().positive().optional(),
+        feedbackFrequency: z.string().optional(),
+        features: z.array(z.string()).optional(),
+        published: z.boolean().optional(),
+      })
+      .parse(req.body);
+    const plan = await Plan.findByIdAndUpdate(req.params.id, data, {
+      new: true,
+      runValidators: true,
+    });
+    if (!plan)
+      throw Object.assign(new Error("Plan not found"), { status: 404 });
+    await Audit.create({
+      actor: (req as Authed).user!.id,
+      action: "PLAN_UPDATED",
+      target: req.params.id,
+      meta: data,
+    });
+    res.json({ plan });
+  }),
+);
+app.get(
+  "/api/v1/admin/coaches",
+  ...roles("ADMIN"),
+  asyncRoute(async (_req, res) =>
+    res.json({
+      coaches: await Coach.find()
+        .populate("user", "name email status")
+        .sort({ createdAt: -1 }),
+    }),
+  ),
+);
+app.patch(
+  "/api/v1/admin/coaches/:id",
+  ...roles("ADMIN"),
+  asyncRoute(async (req, res) => {
+    const update = z
+      .object({
+        approved: z.boolean().optional(),
+        available: z.boolean().optional(),
+        capacity: z.number().int().min(1).optional(),
+      })
+      .parse(req.body);
+    const filter: any = { _id: req.params.id };
+    if (update.capacity !== undefined)
+      filter.$expr = {
+        $lte: [{ $add: ["$activeCount", "$reservedCount"] }, update.capacity],
+      };
+    const profile = await Coach.findOneAndUpdate(filter, update, {
+      new: true,
+      runValidators: true,
+    });
+    if (!profile)
+      throw Object.assign(
+        new Error(
+          "Coach not found or capacity is below active and reserved assignments",
+        ),
+        { status: 409 },
+      );
+    await Audit.create({
+      actor: (req as Authed).user!.id,
+      action: "COACH_UPDATED",
+      target: req.params.id,
+      meta: update,
+    });
+    res.json({ profile });
+  }),
+);
+app.get(
+  "/api/v1/admin/overview",
+  ...roles("ADMIN"),
+  asyncRoute(async (_q, res) => {
+    const [users, plans, subscriptions, pending] = await Promise.all([
+      User.countDocuments(),
+      Plan.countDocuments(),
+      Subscription.countDocuments(),
+      CoachRequest.countDocuments({ status: "PENDING" }),
+    ]);
+    res.json({ users, plans, subscriptions, pending });
+  }),
+);
+app.get(
+  "/api/v1/admin/subscriptions",
+  ...roles("ADMIN"),
+  asyncRoute(async (_req, res) => {
+    await releaseExpiredSubscriptions();
+    res.json({
+      subscriptions: await Subscription.find()
+        .populate("player coach", "name email")
+        .sort({ createdAt: -1 })
+        .limit(200),
+      payments: await Payment.find().sort({ createdAt: -1 }).limit(200),
+    });
+  }),
+);
+app.get(
+  "/api/v1/admin/audit",
+  ...roles("ADMIN"),
+  asyncRoute(async (_req, res) =>
+    res.json({
+      logs: await Audit.find()
+        .populate("actor", "name email")
+        .sort({ createdAt: -1 })
+        .limit(200),
+    }),
+  ),
+);
+app.post(
+  "/api/v1/subscriptions",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const { planId } = z
+      .object({ planId: z.string().regex(/^[a-f\d]{24}$/i) })
+      .parse(req.body);
+    const plan = await Plan.findOne({ _id: planId, published: true });
+    if (!plan)
+      throw Object.assign(new Error("Plan unavailable"), { status: 404 });
+    await releaseExpiredSubscriptions();
+    const now = new Date();
+    const legacy = await Subscription.find({
+      player: req.user!.id,
+      activeSlot: { $ne: true },
+    }).select("status expiresAt");
+    if (
+      legacy.some((item) =>
+        hasBlockingSubscription(item.status, item.expiresAt, now),
+      ) ||
+      (await Subscription.exists({ player: req.user!.id, activeSlot: true }))
+    )
+      throw Object.assign(
+        new Error("An active or pending subscription already exists"),
+        { status: 409 },
+      );
+    let sub;
+    try {
+      sub = await Subscription.create({
+        player: req.user!.id,
+        activeSlot: true,
+        plan: plan._id,
+        planSnapshot: {
+          name: plan.name,
+          pricePaise: plan.pricePaise,
+          durationDays: plan.durationDays,
+          maxVideos: plan.maxVideos,
+          includedReviews: plan.includedReviews,
+          features: plan.features,
+        },
+      });
+    } catch (error: any) {
+      if (error.code === 11000)
+        throw Object.assign(
+          new Error("An active or pending subscription already exists"),
+          { status: 409 },
+        );
+      throw error;
+    }
+    try {
+      let payment;
+      if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+        const order = await createRazorpayOrder(
+          plan.pricePaise,
+          sub.id,
+          sub.id,
+        );
+        payment = await Payment.create({
+          subscription: sub._id,
+          amountPaise: plan.pricePaise,
+          orderId: order.id,
+        });
+        res
+          .status(201)
+          .json({
+            subscription: sub,
+            payment,
+            checkout: {
+              enabled: true,
+              keyId: process.env.RAZORPAY_KEY_ID,
+              orderId: order.id,
+              amount: order.amount,
+              currency: order.currency,
+            },
+          });
+        return;
+      }
+      if (process.env.NODE_ENV === "production")
+        throw Object.assign(
+          new Error("Razorpay credentials are required in production"),
+          { status: 503 },
+        );
+      payment = await Payment.create({
+        subscription: sub._id,
+        amountPaise: plan.pricePaise,
+      });
+      res
+        .status(201)
+        .json({
+          subscription: sub,
+          payment,
+          checkout: { enabled: false, keyId: null },
+        });
+    } catch (error) {
+      await Subscription.deleteOne({ _id: sub._id });
+      throw error;
+    }
+  }),
+);
+app.post(
+  "/api/v1/subscriptions/:id/payment-order",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const sub = await Subscription.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        player: req.user!.id,
+        status: "PENDING_PAYMENT",
+        paymentOrderPending: { $ne: true },
+      },
+      { $set: { paymentOrderPending: true } },
+      { new: true },
+    );
+    if (!sub)
+      throw Object.assign(
+        new Error(
+          "Pending subscription not found or payment order is already being created",
+        ),
+        { status: 409 },
+      );
+    try {
+      const snapshot = sub.planSnapshot;
+      if (!snapshot) throw new Error("Subscription plan snapshot is missing");
+      if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET)
+        throw Object.assign(
+          new Error("Razorpay credentials are not configured"),
+          { status: 503 },
+        );
+      const existing = await Payment.findOne({
+        subscription: sub._id,
+        state: { $in: ["CREATED", "PENDING"] },
+        orderId: { $exists: true },
+      });
+      if (existing) {
+        await Subscription.updateOne(
+          { _id: sub._id },
+          { $set: { paymentOrderPending: false } },
+        );
+        res.json({
+          payment: existing,
+          checkout: {
+            enabled: true,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            orderId: existing.orderId,
+            amount: existing.amountPaise,
+            currency: existing.currency,
+          },
+        });
+        return;
+      }
+      const order = await createRazorpayOrder(
+        snapshot.pricePaise!,
+        sub.id,
+        sub.id,
+      );
+      const payment = await Payment.create({
+        subscription: sub._id,
+        amountPaise: snapshot.pricePaise,
+        orderId: order.id,
+      });
+      await Subscription.updateOne(
+        { _id: sub._id },
+        { $set: { paymentOrderPending: false } },
+      );
+      res
+        .status(201)
+        .json({
+          payment,
+          checkout: {
+            enabled: true,
+            keyId: process.env.RAZORPAY_KEY_ID,
+            orderId: order.id,
+            amount: order.amount,
+            currency: order.currency,
+          },
+        });
+    } catch (error) {
+      await Subscription.updateOne(
+        { _id: sub._id },
+        { $set: { paymentOrderPending: false } },
+      );
+      throw error;
+    }
+  }),
+);
+app.get(
+  "/api/v1/subscriptions/me",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    await releaseExpiredSubscriptions();
+    res.json({
+      subscriptions: await Subscription.find({ player: req.user!.id })
+        .populate("plan coach", "name email")
+        .sort({ createdAt: -1 }),
+    });
+  }),
+);
+app.get(
+  "/api/v1/payments/me",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const subscriptions = await Subscription.find({
+      player: req.user!.id,
+    }).distinct("_id");
+    res.json({
+      payments: await Payment.find({
+        subscription: { $in: subscriptions },
+      }).sort({ createdAt: -1 }),
+    });
+  }),
+);
+app.post(
+  "/api/v1/payments/:id/verify",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const payment = await Payment.findById(req.params.id).populate(
+      "subscription",
+    );
+    if (!payment)
+      throw Object.assign(new Error("Payment not found"), { status: 404 });
+    const sub: any = payment.subscription;
+    if (String(sub.player) !== req.user!.id)
+      throw Object.assign(new Error("Forbidden"), { status: 403 });
+    const input = z
+      .object({
+        razorpay_payment_id: z.string().min(1),
+        razorpay_order_id: z.string().min(1),
+        razorpay_signature: z.string().min(1),
+      })
+      .parse(req.body);
+    if (input.razorpay_order_id !== payment.orderId)
+      throw Object.assign(new Error("Payment order does not match"), {
+        status: 400,
+      });
+    const result = await reconcilePayment(
+      input.razorpay_payment_id,
+      input.razorpay_order_id,
+      input.razorpay_signature,
+    );
+    if (result.changed)
+      await notice(
+        req.user!.id,
+        "Payment verified",
+        "Choose your coach to start your coaching period.",
+        "PAYMENT",
+      );
+    res.json({
+      subscription: await Subscription.findById(sub._id),
+      payment: result.payment,
+    });
+  }),
+);
+app.get(
+  "/api/v1/payments/:id/status",
+  ...roles("PLAYER"),
+  asyncRoute(async (req: Authed, res) => {
+    const payment = await Payment.findById(req.params.id).populate(
+      "subscription",
+    );
+    if (!payment)
+      throw Object.assign(new Error("Payment not found"), { status: 404 });
+    const sub: any = payment.subscription;
+    if (String(sub.player) !== req.user!.
