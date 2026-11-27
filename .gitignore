@@ -4,3 +4,5 @@ dist
 uploads/
 coverage/
 *.tsbuildinfo
+server/.env
+client/.env

@@ -8,6 +8,56 @@ tags: []
 
 CricketVault is a cricket-coaching platform built with React, Vite, and TypeScript on the client and Express, Mongoose, and TypeScript on the API. Players choose paid coaching plans, get matched with a coach, submit video links, receive reviews and action plans, and track their subscription. Administrators manage users, coaches, assignments, plans, coupons, resources, and video moderation.
 
+## Hostinger VPS deployment
+
+CricketVault deploys as one application under one origin: `https://yourdomain.in` for the Vite client and `https://yourdomain.in/api/v1` for the API. Nginx serves `client/dist` and proxies `/api/` internally to the PM2-managed API at `127.0.0.1:4000`.
+
+Keep `VITE_API_URL=/api/v1` in the production frontend build; it is intentionally a relative, same-origin URL. Set `CLIENT_URL=https://yourdomain.in` in `server/.env` with no trailing slash.
+
+1. Point the `yourdomain.in` and `www.yourdomain.in` A records to your VPS public IP.
+2. Run the one-time Ubuntu preparation script as root: `sudo bash deploy/setup-vps.sh yourdomain.in YOUR_DEPLOY_USER`.
+3. As `YOUR_DEPLOY_USER`, clone the repository to `/var/www/cricketvault`, then run `npm ci` and `npm run build`.
+4. Copy `server/.env.production.example` to `server/.env`, fill in real production values, and set permissions with `chmod 600 server/.env`. Do not create demo accounts or run seed scripts on production.
+5. Replace `yourdomain.in` in `deploy/nginx/cricketvault.conf`, then install it:
+
+   ```sh
+   sudo cp deploy/nginx/cricketvault.conf /etc/nginx/sites-available/cricketvault
+   sudo ln -s /etc/nginx/sites-available/cricketvault /etc/nginx/sites-enabled/cricketvault
+   sudo rm -f /etc/nginx/sites-enabled/default
+   sudo nginx -t && sudo systemctl reload nginx
+   ```
+
+6. Start the backend and enable reboot recovery:
+
+   ```sh
+   pm2 startOrReload ecosystem.config.cjs --update-env
+   pm2 save
+   sudo env PATH="$PATH" pm2 startup systemd -u YOUR_DEPLOY_USER --hp /home/YOUR_DEPLOY_USER
+   ```
+
+7. After the HTTP site works, issue SSL certificates:
+
+   ```sh
+   sudo certbot --nginx -d yourdomain.in -d www.yourdomain.in --redirect --agree-tos -m YOUR_EMAIL
+   sudo certbot renew --dry-run
+   ```
+
+In Google Cloud, add `https://yourdomain.in` as an **Authorized JavaScript origin**. This application uses Google Identity Services ID tokens, not a Google server redirect callback. Configure Razorpay’s webhook URL as `https://yourdomain.in/api/v1/payments/webhook` and use the separate production webhook secret in `server/.env`.
+
+### GitHub Actions deployment
+
+Pushes to `main` trigger `.github/workflows/deploy.yml`. The workflow runs tests and builds, then safely connects by SSH and runs `git pull --ff-only`, `npm ci`, `npm run build`, and `pm2 startOrReload` on the VPS.
+
+Create these GitHub repository secrets:
+
+- `VPS_HOST`: VPS IP address or hostname.
+- `VPS_USER`: non-root deployment username.
+- `VPS_SSH_KEY`: private ED25519 deployment key.
+- `VPS_KNOWN_HOSTS`: verified output from `ssh-keyscan -H YOUR_VPS_IP`.
+- `VPS_DEPLOY_PATH`: `/var/www/cricketvault`.
+
+Keep application secrets only in `server/.env` on the VPS. Do not put MongoDB, Razorpay, Brevo, MSG91, JWT, or OTP secrets in client variables or GitHub Actions secrets.
+
 ## Application workflow
 
 ### Player
