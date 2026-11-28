@@ -425,31 +425,28 @@ const resourcePurchaseSchema = new Schema(
   opts,
 );
 resourcePurchaseSchema.index({ user: 1, resource: 1 }, { unique: true });
-export const User = mongoose.model("User", userSchema);
-export const Player = mongoose.model("PlayerProfile", playerSchema);
-export const Coach = mongoose.model("CoachProfile", coachSchema);
-export const Plan = mongoose.model("Plan", planSchema);
-export const Coupon = mongoose.model("Coupon", couponSchema);
-export const Subscription = mongoose.model("Subscription", subscriptionSchema);
-export const CoachRequest = mongoose.model("CoachRequest", requestSchema);
-export const Payment = mongoose.model("Payment", paymentSchema);
-export const Video = mongoose.model("VideoSubmission", videoSchema);
-export const Review = mongoose.model("VideoReview", reviewSchema);
-export const ActionPlan = mongoose.model("ActionPlan", actionPlanSchema);
-export const Notification = mongoose.model("Notification", notificationSchema);
-export const Audit = mongoose.model("AuditLog", auditSchema);
-export const WebhookEvent = mongoose.model("WebhookEvent", webhookEventSchema);
-export const EmailVerification = mongoose.model(
-  "EmailVerification",
-  emailVerificationSchema,
-);
-export const EmailOtp = mongoose.model("EmailOtp", emailOtpSchema);
-export const PhoneVerification = mongoose.model(
-  "PhoneVerification",
-  phoneVerificationSchema,
-);
-export const Resource = mongoose.model("Resource", resourceSchema);
-export const ResourcePurchase = mongoose.model(
-  "ResourcePurchase",
-  resourcePurchaseSchema,
-);
+export const User = mongoose.models.User || mongoose.model("User", userSchema);
+export const Player = mongoose.models.PlayerProfile || mongoose.model("PlayerProfile", playerSchema);
+export const Coach = mongoose.models.CoachProfile || mongoose.model("CoachProfile", coachSchema);
+export const Plan = mongoose.models.Plan || mongoose.model("Plan", planSchema);
+export const Coupon = mongoose.models.Coupon || mongoose.model("Coupon", couponSchema);
+export const Subscription = mongoose.models.Subscription || mongoose.model("Subscription", subscriptionSchema);
+export const CoachRequest = mongoose.models.CoachRequest || mongoose.model("CoachRequest", requestSchema);
+export const Payment = mongoose.models.Payment || mongoose.model("Payment", paymentSchema);
+export const Video = mongoose.models.VideoSubmission || mongoose.model("VideoSubmission", videoSchema);
+export const Review = mongoose.models.VideoReview || mongoose.model("VideoReview", reviewSchema);
+export const ActionPlan = mongoose.models.ActionPlan || mongoose.model("ActionPlan", actionPlanSchema);
+export const Notification = mongoose.models.Notification || mongoose.model("Notification", notificationSchema);
+export const Audit = mongoose.models.AuditLog || mongoose.model("AuditLog", auditSchema);
+export const WebhookEvent = mongoose.models.WebhookEvent || mongoose.model("WebhookEvent", webhookEventSchema);
+export const EmailVerification =
+  mongoose.models.EmailVerification ||
+  mongoose.model("EmailVerification", emailVerificationSchema);
+export const EmailOtp = mongoose.models.EmailOtp || mongoose.model("EmailOtp", emailOtpSchema);
+export const PhoneVerification =
+  mongoose.models.PhoneVerification ||
+  mongoose.model("PhoneVerification", phoneVerificationSchema);
+export const Resource = mongoose.models.Resource || mongoose.model("Resource", resourceSchema);
+export const ResourcePurchase =
+  mongoose.models.ResourcePurchase ||
+  mongoose.model("ResourcePurchase", resourcePurchaseSchema);

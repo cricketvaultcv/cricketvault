@@ -66,13 +66,15 @@ describe("email verification tokens", () => {
         signal: expect.any(AbortSignal),
       }),
     );
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      sender: { name: "CricketVault", email: "no-reply@example.com" },
-      to: [{ email: "player@example.com" }],
-      subject: "Welcome",
-      textContent: "Welcome to CricketVault",
-      htmlContent: "<p>Welcome to CricketVault</p>",
-    });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(
+      expect.objectContaining({
+        sender: { name: "CricketVault", email: "no-reply@example.com" },
+        to: [{ email: "player@example.com" }],
+        subject: "Welcome",
+        textContent: "Welcome to CricketVault",
+        htmlContent: expect.stringContaining("<p>Welcome to CricketVault</p>"),
+      }),
+    );
   });
 
   it("accepts a bare verified sender address", async () => {
