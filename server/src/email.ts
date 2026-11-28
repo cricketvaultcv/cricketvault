@@ -6,6 +6,7 @@ type EmailMessage = {
   subject: string;
   text: string;
   html?: string;
+  preheader?: string;
 };
 
 const escapeHtml = (value: string) =>
@@ -61,6 +62,38 @@ function parseEmailSender(from: string) {
   return name ? { email, name } : { email };
 }
 
+/**
+ * Keeps all transactional messages visually consistent. Callers provide only
+ * the message body; this function adds the CricketVault brand, logo and a
+ * readable footer that works in common email clients.
+ */
+function brandedEmailHtml(content: string, preheader?: string) {
+  const clientUrl = process.env.CLIENT_URL?.trim().replace(/\/$/, "") || "https://cricketvault.tech";
+  const logoUrl = process.env.EMAIL_LOGO_URL?.trim() || `${clientUrl}/cricketvault-logo.png`;
+  const safeLogoUrl = escapeHtml(logoUrl);
+  const safeClientUrl = escapeHtml(clientUrl);
+  const safePreheader = escapeHtml(preheader || "Updates from CricketVault");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;color:#0f172a;">
+  <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">${safePreheader}</span>
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:32px 12px;"><tr><td align="center">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 2px 10px rgba(15,23,42,.08);">
+      <tr><td style="padding:24px 32px;background:#0f172a;">
+        <a href="${safeClientUrl}" style="text-decoration:none;display:inline-flex;vertical-align:middle;">
+          <img src="${safeLogoUrl}" width="54" height="40" alt="CricketVault" style="display:inline-block;vertical-align:middle;object-fit:contain;margin-right:12px;">
+          <span style="font-size:22px;line-height:40px;font-weight:700;color:#ffffff;vertical-align:middle;">Cricket<span style="color:#00bfa6;">Vault</span></span>
+        </a>
+      </td></tr>
+      <tr><td style="padding:32px;font-size:16px;line-height:1.6;color:#334155;">${content}</td></tr>
+      <tr><td style="padding:20px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.5;color:#64748b;">
+        This is an automated message from <a href="${safeClientUrl}" style="color:#0f766e;text-decoration:none;">CricketVault</a>. Please do not share verification codes with anyone.
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
+}
+
 export async function sendEmail(message: EmailMessage) {
   const apiKey = process.env.BREVO_API_KEY?.trim();
   const from = process.env.EMAIL_FROM?.trim();
@@ -89,7 +122,9 @@ export async function sendEmail(message: EmailMessage) {
         to: [{ email: message.to }],
         subject: message.subject,
         textContent: message.text,
-        ...(message.html ? { htmlContent: message.html } : {}),
+        ...(message.html
+          ? { htmlContent: brandedEmailHtml(message.html, message.preheader) }
+          : {}),
       }),
       signal: controller.signal,
     });
@@ -139,6 +174,7 @@ export async function sendPlayerNotificationEmail(
       subject,
       text: `Hi ${user.name},\n\n${message}\n\nCricketVault`,
       html: `<p>Hi ${safeName},</p><p>${safeMessage}</p><p>CricketVault</p>`,
+      preheader: message,
     });
   } catch (error) {
     console.error(JSON.stringify({

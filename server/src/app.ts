@@ -71,6 +71,7 @@ import {
   applyReferralReviews,
   awardReferralForFirstPurchase,
 } from "./referrals.js";
+import { reportOperationalIssue } from "./monitoring.js";
 const secret = () => {
   if (!process.env.JWT_SECRET) throw new Error("JWT_SECRET is required");
   return process.env.JWT_SECRET;
@@ -429,9 +430,11 @@ async function buildPlayerRefundPreview(
   };
 }
 
-app.get("/api/v1/health", (_q, res) =>
-  res.json({ ok: true, mode: process.env.NODE_ENV || "development" }),
-);
+app.get("/api/v1/health", (_q, res) => {
+  const database = mongoose.connection.readyState === 1 ? "connected" : "unavailable";
+  const ok = database === "connected";
+  res.status(ok ? 200 : 503).json({ ok, mode: process.env.NODE_ENV || "development", database });
+});
 app.get("/api/v1/auth/config", (_req, res) =>
   res.json({
     googleClientId: process.env.GOOGLE_CLIENT_ID || null,
@@ -3903,6 +3906,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       status,
     }),
   );
+  if (status >= 500) {
+    void reportOperationalIssue(
+      `http-${status}-${err.message || "unknown"}`,
+      `API returned HTTP ${status}`,
+      err.message || "An unexpected server error occurred while processing a request.",
+      "warning",
+    );
+  }
   res
     .status(status)
     .json({

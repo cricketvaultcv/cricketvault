@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import mongoose from "mongoose";
+import { reportOperationalIssue, startApplicationMonitoring } from "./monitoring.js";
 dotenv.config({
   path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env"),
 });
@@ -28,12 +29,27 @@ if (!uri) {
 }
 mongoose
   .connect(uri)
-  .then(() =>
+  .then(() => {
+    startApplicationMonitoring();
     app.listen(port, () =>
       console.log(`CricketVault API listening on :${port}`),
-    ),
-  )
+    );
+  })
   .catch((error) => {
     console.error("MongoDB connection failed", error.message);
     process.exit(1);
   });
+
+process.on("unhandledRejection", (reason) => {
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  console.error("Unhandled promise rejection", detail);
+  void reportOperationalIssue("unhandled-rejection", "Unhandled server error", detail);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught server exception", error.message);
+  void reportOperationalIssue("uncaught-exception", "API process crashed", error.message).finally(() => {
+    // PM2 restarts the process. A short delay gives the HTTPS email request time to leave the server.
+    setTimeout(() => process.exit(1), 2_000).unref();
+  });
+});
