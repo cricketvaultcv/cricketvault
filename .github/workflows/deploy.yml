@@ -62,5 +62,14 @@ jobs:
           mkdir -p /var/log/cricketvault
           pm2 startOrReload ecosystem.config.cjs --update-env
           pm2 save
-          curl --fail --silent --show-error http://127.0.0.1:4000/api/v1/health
+          # The API connects to MongoDB before listening, so allow startup time.
+          for attempt in $(seq 1 15); do
+            if curl --fail --silent --show-error http://127.0.0.1:4000/api/v1/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API health check failed after 30 seconds" >&2
+          pm2 logs cricketvault-api --lines 80 --nostream || true
+          exit 1
           REMOTE
