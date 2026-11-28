@@ -237,6 +237,61 @@ describe("payment verification", () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it("surfaces Razorpay error description when a refund is rejected", async () => {
+    process.env.RAZORPAY_KEY_ID = "rzp_test_unit";
+    process.env.RAZORPAY_KEY_SECRET = "test-only-secret";
+    process.env.RAZORPAY_MODE = "test";
+    vi.spyOn(Payment, "findById").mockResolvedValue({
+      _id: "payment-record-1",
+      state: "VERIFIED",
+      provider: "razorpay",
+      paymentId: "pay_test_1",
+      orderId: "order_test_1",
+      amountPaise: 49900,
+      currency: "INR",
+    } as never);
+    vi.spyOn(Payment, "findOneAndUpdate").mockResolvedValue({
+      _id: "payment-record-1",
+      state: "VERIFIED",
+    } as never);
+    vi.spyOn(Payment, "updateOne").mockResolvedValue({ modifiedCount: 1 } as never);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "pay_test_1",
+            order_id: "order_test_1",
+            amount: 49900,
+            amount_refunded: 0,
+            currency: "INR",
+            status: "captured",
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "BAD_REQUEST_ERROR",
+              description: "This payment has already been fully refunded",
+            },
+          }),
+          { status: 400 },
+        ),
+      );
+
+    await expect(
+      requestRazorpayRefund("payment-record-1", 33900, {
+        subscriptionId: "subscription-1",
+        playerUserId: "player-1",
+      }),
+    ).rejects.toMatchObject({
+      status: 502,
+      publicMessage: "This payment has already been fully refunded",
+    });
+  });
+
   it("creates a server-side INR Test Mode order with the configured secret", async () => {
     process.env.RAZORPAY_KEY_ID = "rzp_test_unit";
     process.env.RAZORPAY_KEY_SECRET = "test-only-secret";

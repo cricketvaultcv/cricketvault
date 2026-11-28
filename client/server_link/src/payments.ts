@@ -303,11 +303,19 @@ export async function requestRazorpayRefund(
         { $set: { state: "VERIFIED", refundStatus: "FAILED" } },
       );
     }
+    let razorpayErrorDescription = "Razorpay rejected the refund request.";
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.error?.description) {
+        razorpayErrorDescription = parsed.error.description;
+      }
+    } catch {}
+
     throw Object.assign(new Error("Unable to initiate Razorpay refund"), {
       status: 502,
       publicMessage:
         response.status < 500
-          ? "Razorpay rejected the refund request."
+          ? razorpayErrorDescription
           : "Razorpay could not confirm the refund outcome. Reconcile this payment before retrying.",
     });
   }
