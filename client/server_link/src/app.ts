@@ -2364,7 +2364,7 @@ app.get(
 );
 app.get(
   "/api/v1/resources/me",
-  ...roles("PLAYER", "COACH"),
+  ...roles("PLAYER", "COACH", "ADMIN"),
   asyncRoute(async (req: Authed, res) => {
     const purchases = await ResourcePurchase.find({
       user: req.user!.id,
