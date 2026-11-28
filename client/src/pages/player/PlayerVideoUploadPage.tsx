@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 export const PlayerVideoUploadPage: React.FC = () => {
-  const { activeSubscription, cancelPendingSubscription, submitVideoLink } = useApp();
+  const { activeSubscription, cancelPendingSubscription, currentUser, submitVideoLink } = useApp();
   const navigate = useNavigate();
 
   const [title, setTitle] = useState('');
@@ -60,12 +60,30 @@ export const PlayerVideoUploadPage: React.FC = () => {
     setErrorMessage('');
     setIsSubmitting(true);
     try {
-      const res = await submitVideoLink({
+      let res = await submitVideoLink({
         title,
         category,
         linkUrl: videoLink.trim(),
         notes,
       });
+      if (res.code === 'REFERRAL_CREDIT_CONFIRMATION_REQUIRED') {
+        const credits = res.referralCredits ?? currentUser?.referralReviewCredits ?? 0;
+        const approved = window.confirm(
+          `Your plan's video-review limit is reached. Use 1 of your ${credits} referral credit${credits === 1 ? '' : 's'} for this extra review?`,
+        );
+        if (approved) {
+          res = await submitVideoLink({
+            title,
+            category,
+            linkUrl: videoLink.trim(),
+            notes,
+            useReferralCredit: true,
+          });
+        } else {
+          setErrorMessage('Video submission cancelled. Your referral credits were not used.');
+          return;
+        }
+      }
       if (res.success && res.video) {
         setSuccessVideoId(res.video.id);
       } else {
@@ -90,6 +108,11 @@ export const PlayerVideoUploadPage: React.FC = () => {
           <p className="text-xs text-slate-500 mt-1">
             Share a YouTube or Google Drive practice clip for review by your assigned coach.
           </p>
+          {currentUser?.referralReviewCredits ? (
+            <p className="mt-2 text-xs font-semibold text-[#008f7e]">
+              Referral credits available: {currentUser.referralReviewCredits}. Each credit can approve one extra video review after your plan limit.
+            </p>
+          ) : null}
         </div>
 
         {/* Subscription Restriction Banner (Required by prompt) */}

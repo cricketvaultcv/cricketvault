@@ -5,6 +5,7 @@ import {
   hasBlockingSubscription,
   isSubscriptionActive,
   safeSignatureEqual,
+  videoSubmissionAllowance,
 } from "./policies.js";
 import { Subscription } from "./models.js";
 
@@ -79,4 +80,11 @@ it("compares payment signatures without accepting malformed lengths", () => {
   expect(safeSignatureEqual("aabb", "aabb")).toBe(true);
   expect(safeSignatureEqual("aabb", "aab")).toBe(false);
   expect(safeSignatureEqual("aabb", "zzzz")).toBe(false);
+});
+
+it("requires an explicit referral-credit approval only after the plan video-review limit", () => {
+  expect(videoSubmissionAllowance(1, 2, 5, false)).toBe("PLAN");
+  expect(videoSubmissionAllowance(2, 2, 0, false)).toBe("LIMIT_REACHED");
+  expect(videoSubmissionAllowance(2, 2, 1, false)).toBe("CONFIRM_REFERRAL");
+  expect(videoSubmissionAllowance(2, 2, 1, true)).toBe("REFERRAL");
 });

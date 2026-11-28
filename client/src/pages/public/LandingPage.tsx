@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Navbar } from '../../components/layout/Navbar';
 import { Footer } from '../../components/layout/Footer';
@@ -15,35 +15,13 @@ import {
   Sparkles,
   ShieldCheck,
   TrendingUp,
-  X,
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
   const { currentUser, resources } = useApp();
   const navigate = useNavigate();
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
-  const [showIntroPopup, setShowIntroPopup] = useState(false);
-
   const featuredResources = resources.slice(0, 4);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setShowIntroPopup(true), 1000);
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!showIntroPopup) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowIntroPopup(false);
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [showIntroPopup]);
 
   const faqs = [
     {
@@ -71,48 +49,6 @@ export const LandingPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col">
       <Navbar />
-
-      {showIntroPopup && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm"
-          onClick={() => setShowIntroPopup(false)}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="intro-popup-title"
-            className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-700 bg-[#0F172A] text-white shadow-2xl"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              onClick={() => setShowIntroPopup(false)}
-              aria-label="Close introduction"
-              className="absolute right-3 top-3 z-10 rounded-full bg-slate-900/80 p-2 text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
-            >
-              <X className="h-5 w-5" />
-            </button>
-            <div className="flex aspect-video flex-col items-center justify-center gap-3 bg-slate-900 px-6 text-center">
-              <Video className="h-12 w-12 text-[#00BFA6]" />
-              <h2 id="intro-popup-title" className="text-xl font-extrabold sm:text-2xl">
-                Welcome to CricketVault
-              </h2>
-              <p className="max-w-md text-sm text-slate-400">
-                Our introduction video will be available here soon.
-              </p>
-            </div>
-            <div className="flex justify-end border-t border-slate-800 px-5 py-4">
-              <button
-                type="button"
-                onClick={() => setShowIntroPopup(false)}
-                className="rounded-xl bg-[#00BFA6] px-5 py-2.5 text-sm font-bold text-[#0F172A] transition-colors hover:bg-[#00D6BA]"
-              >
-                Continue to site
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
 
       {/* Hero Section (Recreates Reference 1 & 2 Home Page Hero) */}
       <section className="relative bg-[#0F172A] text-white overflow-hidden py-16 sm:py-24 border-b border-slate-800">

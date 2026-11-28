@@ -136,6 +136,7 @@ const subscriptionSchema = new Schema(
     paymentOrderPending: { type: Boolean, default: false },
     reviewCount: { type: Number, default: 0, min: 0 },
     submittedVideoCount: { type: Number, default: 0, min: 0 },
+    referralVideoCreditsUsed: { type: Number, default: 0, min: 0 },
     coach: { type: Schema.Types.ObjectId, ref: "User" },
     plan: { type: Schema.Types.ObjectId, ref: "Plan", required: true },
     planSnapshot: {

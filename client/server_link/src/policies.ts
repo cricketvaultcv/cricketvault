@@ -34,6 +34,17 @@ export function canRequestCoach(status: string, paymentState: string) {
   return status === "AWAITING_COACH" && paymentState === "VERIFIED";
 }
 
+export function videoSubmissionAllowance(
+  submittedCount: number,
+  planLimit: number,
+  referralCredits: number,
+  useReferralCredit: boolean,
+) {
+  if (submittedCount < planLimit) return "PLAN" as const;
+  if (referralCredits <= 0) return "LIMIT_REACHED" as const;
+  return useReferralCredit ? ("REFERRAL" as const) : ("CONFIRM_REFERRAL" as const);
+}
+
 export function safeSignatureEqual(expected: string, received: string): boolean {
   const expectedBytes = Buffer.from(expected, "hex");
   const receivedBytes = Buffer.from(received, "hex");

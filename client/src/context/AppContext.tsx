@@ -341,7 +341,7 @@ interface AppContextType {
   requestCoach: (coachId: string, notes?: string) => Promise<{ success: boolean; message?: string }>;
   respondToCoachRequest: (requestId: string, status: 'accepted' | 'rejected', reason?: string) => Promise<void>;
   reassignCoach: (coachId: string) => Promise<{ success: boolean; message?: string }>;
-  submitVideoLink: (data: { title: string; category: VideoSubmission['category']; linkUrl: string; notes?: string }) => Promise<{ success: boolean; message?: string; video?: VideoSubmission }>;
+  submitVideoLink: (data: { title: string; category: VideoSubmission['category']; linkUrl: string; notes?: string; useReferralCredit?: boolean }) => Promise<{ success: boolean; message?: string; code?: string; referralCredits?: number; video?: VideoSubmission }>;
   submitCoachReview: (videoId: string, reviewData: { technicalObservations: string; strengths: string[]; areasToImprove: string[]; drills: RecommendedDrill[]; tasks: ActionPlanTask[] }) => Promise<{ success: boolean; message?: string }>;
   toggleActionPlanTask: (videoId: string, taskId: string) => Promise<void>;
   purchaseResource: (resourceId: string) => Promise<void>;
@@ -785,7 +785,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         video: mapVideo(response.data.video, currentUser || undefined, assignedCoach || undefined, undefined, text(access.data.url)),
       };
     } catch (error) {
-      return { success: false, message: apiErrorMessage(error) };
+      const payload = (error as { response?: { data?: { code?: unknown; referralCredits?: unknown } } })?.response?.data;
+      return {
+        success: false,
+        message: apiErrorMessage(error),
+        code: typeof payload?.code === 'string' ? payload.code : undefined,
+        referralCredits: typeof payload?.referralCredits === 'number' ? payload.referralCredits : undefined,
+      };
     }
   };
   const submitCoachReview: AppContextType['submitCoachReview'] = async (videoId, data) => {

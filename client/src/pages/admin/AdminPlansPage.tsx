@@ -248,7 +248,7 @@ export const AdminPlansPage: React.FC = () => {
                     <th className="p-4">Plan</th>
                     <th className="p-4">Price</th>
                     <th className="p-4">Duration</th>
-                    <th className="p-4">Videos / Reviews</th>
+                    <th className="p-4">Video-review limits</th>
                     <th className="p-4">Visibility</th>
                     <th className="p-4 text-right">Actions</th>
                   </tr>
@@ -262,7 +262,7 @@ export const AdminPlansPage: React.FC = () => {
                       </td>
                       <td className="p-4 font-bold text-slate-900">₹{(plan.pricePaise / 100).toFixed(2)}</td>
                       <td className="p-4 text-slate-600">{plan.durationDays} days</td>
-                      <td className="p-4 text-slate-600">{plan.maxVideos} / {plan.includedReviews}</td>
+                      <td className="p-4 text-slate-600">{plan.maxVideos} submissions / {plan.includedReviews} coach reviews</td>
                       <td className="p-4">
                         <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${plan.published ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                           {plan.published ? 'Published' : 'Unpublished'}
@@ -351,7 +351,7 @@ export const AdminPlansPage: React.FC = () => {
               <label className="text-xs font-bold text-slate-700">Duration (days)
                 <input required type="number" min="1" step="1" value={planForm.durationDays} onChange={(e) => setPlanForm({ ...planForm, durationDays: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 font-normal" />
               </label>
-              <label className="text-xs font-bold text-slate-700">Maximum Videos
+              <label className="text-xs font-bold text-slate-700">Maximum Video-review Submissions
                 <input required type="number" min="1" step="1" value={planForm.maxVideos} onChange={(e) => setPlanForm({ ...planForm, maxVideos: Number(e.target.value) })} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 font-normal" />
               </label>
               <label className="text-xs font-bold text-slate-700">Included Reviews

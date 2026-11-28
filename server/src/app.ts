@@ -57,6 +57,7 @@ import {
   canRequestCoach,
   hasBlockingSubscription,
   isSubscriptionActive,
+  videoSubmissionAllowance,
   type ResourceRole,
 } from "./policies.js";
 import {
@@ -2538,7 +2539,6 @@ app.post(
     const pricing = couponCode
       ? await pricePlanWithCoupon(plan, couponCode)
       : { coupon: null, discountPaise: 0, finalAmountPaise: plan.pricePaise };
-    const referralReviewsUsed = Math.max(0, Number(purchaser.referralReviewCredits || 0));
     await releaseExpiredSubscriptions();
     const now = new Date();
     const legacy = await Subscription.find({
@@ -2569,8 +2569,10 @@ app.post(
           couponCode: pricing.coupon?.code,
           durationDays: plan.durationDays,
           maxVideos: plan.maxVideos,
-          includedReviews: plan.includedReviews + referralReviewsUsed,
-          referralReviewsUsed,
+          includedReviews: plan.includedReviews,
+          // Referral credits are retained and used only when a player explicitly
+          // approves an extra submission after this plan's normal limit is reached.
+          referralReviewsUsed: 0,
           features: plan.features,
         },
       });
@@ -3473,7 +3475,7 @@ app.post(
   "/api/v1/videos",
   ...roles("PLAYER"),
   asyncRoute(async (req: Authed, res) => {
-    const { subscriptionId, title, category, notes, linkUrl } = z
+    const { subscriptionId, title, category, notes, linkUrl, useReferralCredit } = z
       .object({
         subscriptionId: z.string().regex(/^[a-f\d]{24}$/i),
         title: z.string().min(1).max(120),
@@ -3486,6 +3488,7 @@ app.post(
         ]),
         notes: z.string().max(2000).optional(),
         linkUrl: z.string().trim().min(1).max(2048),
+        useReferralCredit: z.boolean().optional().default(false),
       })
       .parse(req.body);
     const externalVideo = validateExternalVideoUrl(linkUrl);
@@ -3510,10 +3513,44 @@ app.post(
         const count = await Video.countDocuments({
           subscription: sub._id,
         }).session(session);
-        if (count >= sub.planSnapshot.maxVideos)
-          throw Object.assign(new Error("Video allowance reached"), {
-            status: 409,
-          });
+        const submittedCount = Math.max(Number(sub.submittedVideoCount || 0), count);
+        const player = await User.findById(req.user!.id)
+          .select("referralReviewCredits")
+          .session(session);
+        const allowance = videoSubmissionAllowance(
+          submittedCount,
+          sub.planSnapshot.maxVideos,
+          Number(player?.referralReviewCredits || 0),
+          useReferralCredit,
+        );
+        if (allowance === "LIMIT_REACHED")
+          throw Object.assign(
+            new Error(
+              "Your plan's video-review limit has been reached. You can choose another plan after this subscription expires.",
+            ),
+            { status: 409, code: "VIDEO_REVIEW_LIMIT_REACHED" },
+          );
+        if (allowance === "CONFIRM_REFERRAL")
+          throw Object.assign(
+            new Error("Your plan limit is reached. Confirm using 1 referral credit for this extra video review."),
+            {
+              status: 409,
+              code: "REFERRAL_CREDIT_CONFIRMATION_REQUIRED",
+              referralCredits: Number(player?.referralReviewCredits || 0),
+            },
+          );
+        if (allowance === "REFERRAL") {
+          const creditClaim = await User.findOneAndUpdate(
+            { _id: req.user!.id, referralReviewCredits: { $gt: 0 } },
+            { $inc: { referralReviewCredits: -1 } },
+            { new: true, session },
+          );
+          if (!creditClaim)
+            throw Object.assign(
+              new Error("No referral credits remain for an extra video review."),
+              { status: 409, code: "VIDEO_REVIEW_LIMIT_REACHED" },
+            );
+        }
         const claimed = await Subscription.findOneAndUpdate(
           {
             _id: sub._id,
@@ -3521,7 +3558,12 @@ app.post(
             paymentState: "VERIFIED",
             expiresAt: { $gt: new Date() },
           },
-          { $set: { submittedVideoCount: count + 1 } },
+          {
+            $set: { submittedVideoCount: submittedCount + 1 },
+            ...(allowance === "REFERRAL"
+              ? { $inc: { referralVideoCreditsUsed: 1 } }
+              : {}),
+          },
           { new: true, session },
         );
         if (!claimed)
@@ -3867,6 +3909,10 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
       error:
         err.publicMessage ||
         (status >= 500 ? "Internal server error" : err.message || "Request failed"),
+      ...(err.code ? { code: err.code } : {}),
+      ...(Number.isSafeInteger(err.referralCredits)
+        ? { referralCredits: err.referralCredits }
+        : {}),
     });
 });
 export default app;
